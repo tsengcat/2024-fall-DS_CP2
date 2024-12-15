@@ -25,16 +25,21 @@ for location in range(1, 18):
     train_df["Minute"] = train_df["DateTime"].dt.minute
     train_df["DayOfWeek"] = train_df["DateTime"].dt.dayofweek
 
+    # 創建歷史特徵（上一小時、上一分鐘的數據）
+    train_df["Prev_Hour_Power"] = train_df["Power(mW)"].shift(1)
+    train_df["Prev_Minute_Power"] = train_df["Power(mW)"].shift(1)
+
     # 特徵與標籤
-    features = ["WindSpeed(m/s)", "Pressure(hpa)", "Temperature(°C)", "Humidity(%)", "Sunlight(Lux)", "Hour", "Minute", "DayOfWeek"]
-    X = train_df[features]
+    features = ["WindSpeed(m/s)", "Pressure(hpa)", "Temperature(°C)", "Humidity(%)", "Sunlight(Lux)", 
+                "Hour", "Minute", "DayOfWeek", "Prev_Hour_Power", "Prev_Minute_Power"]
+    X = train_df[features].fillna(0)  # 用 0 填充缺失值
     y = train_df["Power(mW)"]
 
     # 切分數據集
     X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=42)
 
     # 訓練模型
-    model = XGBRegressor(n_estimators=200, learning_rate=0.05, max_depth=8, random_state=42)
+    model = XGBRegressor(n_estimators=300, learning_rate=0.03, max_depth=10, subsample=0.8, random_state=42)
     model.fit(X_train, y_train)
 
     # 驗證模型
@@ -59,25 +64,34 @@ upload_df["Hour"] = upload_df["DateTime"].dt.hour
 upload_df["Minute"] = upload_df["DateTime"].dt.minute
 upload_df["DayOfWeek"] = upload_df["DateTime"].dt.dayofweek
 
-# 準備特徵列表
-features = ["WindSpeed(m/s)", "Pressure(hpa)", "Temperature(°C)", "Humidity(%)", "Sunlight(Lux)", "Hour", "Minute", "DayOfWeek"]
-
 # 預測每一行的答案
 predictions = []
 for _, row in upload_df.iterrows():
     location = row["LocationCode"]
     model = models[location]  # 使用對應的裝置模型
 
-    # 查找對應裝置的訓練數據
-    location_data = train_data[location]
-    
+    # 查找對應裝置的特徵數據
+    location_data = pd.read_csv(os.path.join(train_folder, f"L{location}_train.csv"))
+    location_data["DateTime"] = pd.to_datetime(location_data["DateTime"])
+
+    # 計算時間特徵：這一步保證了 'Hour', 'Minute', 'DayOfWeek' 被計算出來
+    location_data["Hour"] = location_data["DateTime"].dt.hour
+    location_data["Minute"] = location_data["DateTime"].dt.minute
+    location_data["DayOfWeek"] = location_data["DateTime"].dt.dayofweek
+
+    # 創建歷史特徵（上一小時、上一分鐘的數據）
+    location_data["Prev_Hour_Power"] = location_data["Power(mW)"].shift(1)
+    location_data["Prev_Minute_Power"] = location_data["Power(mW)"].shift(1)
+
     # 找到最近的特徵值
     closest_row = location_data.iloc[(location_data["DateTime"] - row["DateTime"]).abs().argsort()[:1]]
-    X_pred = closest_row[features]
+
+    # 確保選擇了所有需要的特徵
+    X_pred = closest_row[features].iloc[0].fillna(0)  # 用 0 填充缺失值
 
     # 預測
-    prediction = model.predict(X_pred)[0]
-    predictions.append(max(0, round(prediction, 2)))  # 確保非負，格式化到小數點後兩位
+    prediction = model.predict([X_pred.values])[0]  # 確保 X_pred 轉為二維數組
+    predictions.append(f"{max(0, round(prediction, 2)):.2f}")  # 格式化為兩位小數的字符串
 
 # 保存預測結果
 upload_df["答案"] = predictions
